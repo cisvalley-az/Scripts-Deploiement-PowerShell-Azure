@@ -1,0 +1,76 @@
+=========== 2nd essai pour création d'une machine de rebond dans une DMZ :
+URL de ref : Démarrage rapide : Créer une machine virtuelle Windows Server à l’aide de PowerShell :
+https://docs.microsoft.com/fr-fr/azure-stack/user/azure-stack-quick-create-vm-windows-powershell
+
+#. Créer un groupe de ressources :
+
+Liste des régions :
+centralus,eastasia,southeastasia,eastus,eastus2,westus,westus2,northcentralus,southcentralus,westcentralus,northeurope,westeurope,japaneast,japanwest,brazilsouth,australiasoutheast,australiaeast,westindia,southindia,centralindia,canadacentral,canadaeast,uksouth,ukwest,koreacentral,koreasouth,francecentral,southafricanorth,uaenorth
+
+	$location = "francecentral"
+	$ResourceGroupName = "ResourceGroupCIS_4"
+
+	New-AzureRmResourceGroup -Name $ResourceGroupName -Location $location
+
+
+#. Créer des ressources de stockage :
+
+	# Création des variables pour enregistrer le "storage account name" et préciser le "storage account SKU information" :
+	$StorageAccountName = "storagegroupcis4"
+	$SkuName = "Standard_LRS"
+
+	# Création d'un nouveau "storage account" :
+	$StorageAccount = New-AzureRMStorageAccount -Location $location -ResourceGroupName $ResourceGroupName -Type $SkuName -Name $StorageAccountName
+
+	Set-AzureRmCurrentStorageAccount -StorageAccountName $storageAccountName -ResourceGroupName $ResourceGroupName
+
+
+
+#. Création de ressources de mise en réseau :
+
+	# Création d'un subnet :
+	$subnetConfig_DMZ_4 = New-AzureRmVirtualNetworkSubnetConfig -Name Subnet_DMZ_4 -AddressPrefix 172.19.32.0/24
+
+	# Création d'un virtual network :
+	$vnet_DMZ_4 = New-AzureRmVirtualNetwork -ResourceGroupName $ResourceGroupName -Location $location -Name vNET_DMZ3 -AddressPrefix 172.19.0.0/16 -Subnet $subnetConfig_DMZ_4
+
+	# Création d'une adresse IP public & spécification du nom DNS associé :
+	$pubip_VM_Rebond_4 = New-AzureRmPublicIpAddress -ResourceGroupName $ResourceGroupName -Location $location -AllocationMethod Static -IdleTimeoutInMinutes 4 -Name "vmrebond4public$(Get-Random)"
+
+#. Création d'un groupe de sécurité réseau et une règle de groupe de sécurité réseau :
+	
+	# Création d'une règle de flux entrant pour le port 3389 :
+	$Regle1RDP = New-AzureRmNetworkSecurityRuleConfig -Name Regle1RDP_acces_depuis_CIS -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow
+
+	# Création d'un "network security group" (NSG) :
+	$nsg_DMZ_4 = New-AzureRmNetworkSecurityGroup -ResourceGroupName $ResourceGroupName -Location $location -Name NetworkSecurityGroup_DMZ_4 -SecurityRules $Regle1RDP
+
+
+#. Création d'une carte réseau pour la machine virtuelle :
+	Association d'une carte réseau connectée la machine virtuelle + sous-réseau + groupe de sécurité réseau +  adresse IP publique :
+	$nic_VM_Rebond_4 = New-AzureRmNetworkInterface -Name NicVMRebond -ResourceGroupName $ResourceGroupName -Location $location -SubnetId $vnet_DMZ_4.Subnets[0].Id -PublicIpAddressId $pubip_VM_Rebond_4.Id -NetworkSecurityGroupId $nsg_DMZ_4.Id
+
+#. Création de la machine virtuelle :
+	# Définition d'un objet nommé "credential_VM1" pour stoker le username et le password de la VM :
+	$UserName_VM_Rebond_4='admincis'
+	$Password_VM_Rebond_4='Ci5ValLey2019*31'| ConvertTo-SecureString -Force -AsPlainText
+	$Credential_VM_Rebond_4=New-Object PSCredential($UserName_VM_Rebond_4,$Password_VM_Rebond_4)
+
+	# Configuration de la VM  :
+	$VmName = "VM_Rebond_4"
+	$VmSize = "Standard_A1"
+	$VirtualMachineRebond = New-AzureRmVMConfig -VMName $VmName -VMSize $VmSize
+
+	$VirtualMachineRebond = Set-AzureRmVMOperatingSystem -VM $VirtualMachineRebond -Windows -ComputerName "VMRebond" -Credential $Credential_VM_Rebond_4
+
+	$VirtualMachineRebond = Set-AzureRmVMSourceImage -VM $VirtualMachineRebond -PublisherName "MicrosoftWindowsServer" -Offer "WindowsServer" -Skus "2016-Datacenter" -Version "latest"
+
+	# Paramétrage des propriétés du disque de la VM :
+	$VirtualMachineRebond = Set-AzureRmVMOSDisk -VM $VirtualMachineRebond -CreateOption FromImage | Set-AzureRmVMBootDiagnostics -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Enable | Add-AzureRmVMNetworkInterface -Id $nic_VM_Rebond_4.Id
+
+
+	# Création de la VM :
+	New-AzureRmVM -ResourceGroupName $ResourceGroupName -Location $location -VM $VirtualMachineRebond
+
+#. Obtenir l'IP publique de la VM :
+	Get-AzureRmPublicIpAddress -ResourceGroupName $ResourceGroupName | Select IpAddress
