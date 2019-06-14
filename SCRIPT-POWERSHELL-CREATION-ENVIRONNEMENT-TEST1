@@ -1,0 +1,170 @@
+======= 1er script : création de l'environnement composé de : 
+	1 subnet LAN (192.168.31/24)
+	1 subnet DMZ (192.168.32.0/24)
+	1 Network Security Group permettant de filter les accès entrant et sortants de la DMZ.
+	3 VM : 
+		1 VM Windows AD dans le LAN.
+		1 VM Windows de Rebond dans la DMZ.
+		1 VM frontal Web Linux dans la DMZ
+
+
+$region = "west europe"
+$resource_group = "ResourceGroupCIS_1"
+
+#. Création Resource Group : 
+New-AzureRmResourceGroup -Name $resource_group -Location $region
+
+
+#. Création des 2 réseaux virtuels : LAN et DMZ :
+$SubnetLAN = New-AzureRmVirtualNetworkSubnetConfig -Name SubnetLAN -AddressPrefix "192.168.31.0/24"
+$SubnetDMZ = New-AzureRmVirtualNetworkSubnetConfig -Name SubnetDMZ -AddressPrefix "192.168.32.0/24"
+
+New-AzureRmVirtualNetwork -Name "vNET-Global-LAN-DMZ" -ResourceGroupName $resource_group -Location $region -AddressPrefix "192.168.0.0/16"  -subnet $SubnetLAN, $SubnetDMZ
+
+$virtual_network = Get-AzureRmVirtualNetwork -Name 'vNET-Global-LAN-DMZ' -ResourceGroupName $resource_group
+
+$SubnetID_LAN = (Get-AzureRmVirtualNetworkSubnetConfig -Name 'SubnetLAN' -VirtualNetwork $virtual_network).Id
+$SubnetID_DMZ = (Get-AzureRmVirtualNetworkSubnetConfig -Name 'SubnetDMZ' -VirtualNetwork $virtual_network).Id
+
+
+#. Création des IP publiques pour 2 serveurs (machine de rebond, et le frontal web localisés en DMZ):
+  #. VM de rebond :
+  $IPpubMachineRebond = "IPpubVM_Windows_Rebond"
+  $IPpub1 = New-AzureRmPublicIpAddress -Name $IPpubMachineRebond -ResourceGroupName $resource_group -Location $region -AllocationMethod Dynamic
+
+  $NICpub_MachineRebond = "InterfaceReseauPubMachineRebond"
+  $nicpub1 = New-AzureRmNetworkInterface -Name $NICpub_MachineRebond -ResourceGroupName $resource_group -Location $region -Subnetid $SubnetID_DMZ -PublicIpAddressId $IPpub1.Id
+
+  #. VM frontal web :
+  $IPpubFrontalWeb = "IPpubVM_Linux_Frontal"
+  $IPpub2 = New-AzureRmPublicIpAddress -Name $IPpubMachineRebond -ResourceGroupName $resource_group -Location $region -AllocationMethod Dynamic
+
+  $NICpub_FrontalWeb = "InterfaceReseauPubFrontalWeb"
+  $nicpub2 = New-AzureRmNetworkInterface -Name $NICpub_FrontalWeb -ResourceGroupName $resource_group -Location $region -Subnetid $SubnetID_DMZ -PublicIpAddressId $IPpub2.Id
+
+
+#. NSG (network security group) :
+  #. Création d'une règle de flux NSG pour permettre le trafic HTTPS depuis Internet vers la DMZ (qui contiendra un frontal Web Linux en load balancing) :
+  $Regle1_HTTPS = New-AzureRmNetworkSecurityRuleConfig -Name Autorisation-HTTPS-depuis-Internet-vers-DMZ  -Protocol Tcp -Direction Inbound -Priority 1000 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 443 -Access Allow
+
+  #. Création d'une règle de flux NSG pour permettre le trafic SSH depuis CIS Valley vers la DMZ (pour prise de main à distance) :
+  $Regle2_SSH = New-AzureRmNetworkSecurityRuleConfig -Name Autorisation-SSH-depuis-CIS-vers-DMZ  -Protocol Tcp -Direction Inbound -Priority 1001 -SourceAddressPrefix 194.51.244.51/32 -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 22 -Access Allow
+
+  #. Création d'une règle de flux NSG pour permettre le trafic RDP depuis CIS Valley vers la DMZ (pour prise de main à distance) :
+  $Regle3_RDP = New-AzureRmNetworkSecurityRuleConfig -Name Autorisation-RDP-depuis-CIS-BDX-vers-DMZ  -Protocol Tcp -Direction Inbound -Priority 1002 -SourceAddressPrefix 194.51.244.51/32 -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow
+  $Regle4_RDP = New-AzureRmNetworkSecurityRuleConfig -Name Autorisation-RDP-depuis-CIS-TLS-vers-DMZ  -Protocol Tcp -Direction Inbound -Priority 1003 -SourceAddressPrefix 82.235.131.90/32 -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow
+  $Regle5_RDP = New-AzureRmNetworkSecurityRuleConfig -Name Autorisation-RDP-depuis-Internet-vers-DMZ  -Protocol Tcp -Direction Inbound -Priority 1004 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange * -Access Allow
+
+  #. Création d'une règle permettant la communication RDP entre la VM de rebond et le LAN :
+  $Regle6_RDP = New-AzureRmNetworkSecurityRuleConfig -Name Autorisation-RDP-depuis-DMZ-vers-LAN  -Protocol Tcp -Direction Inbound -Priority 1005 -SourceAddressPrefix * -SourcePortRange * -DestinationAddressPrefix * -DestinationPortRange 3389 -Access Allow
+
+  #. Création d'un NSG (network security group) pour le subnet DMZ :
+  $NSG_DMZ = New-AzureRmNetworkSecurityGroup -ResourceGroupName $resource_group -Location $region -Name NSG_DMZ -SecurityRules $Regle1_HTTPS, $Regle2_SSH, $Regle3_RDP, $Regle4_RDP, $Regle5_RDP, $Regle6_RDP
+
+  #. Associer le NSG_DMZ avec le bon subnet (celui de la DMZ) :
+  Set-AzureRmVirtualNetworkSubnetConfig -Name Association_NSG_DMZ_et_DMZ_subnet -VirtualNetwork $virtual_network -AddressPrefix $SubnetDMZ -NetworkSecurityGroup $NSG_DMZ
+
+
+#. Création compte de stockage qui contiendra les disques virtuels des VMs :
+Attention : le nom du compte de stockage doit être en minuscules (peut contenir des chiffres), faire moins de 24 caractères et ne pas contenir d'autres types de caractères (., _, -, ...).
+
+New-AzureRmStorageAccount -ResourceGroupName $resource_group -Name storagegroupcis1 -Location $region -SkuName "Standard_LRS"
+$Compte_StockageCIS1 = Get-AzureRmStorageAccount -ResourceGroupName $resource_group -name "storagegroupcis1"
+
+#. Création d'une VM Windows (VM de rebond) en DMZ :
+	# On définit un objet "credential"  pour stocker le username et password pour la VM (qui n'a pas à être connectée à l'AD du LAN) :
+	$UserName = 'admincis'
+	$Password_VM_Rebond = 'Ci5ValLey2019*32'| ConvertTo-SecureString -Force -AsPlainText
+	$Credential_VM_Rebond = New-Object PSCredential($UserName,$Password_VM_Rebond)
+
+	$VM_Rebond_Name = "VMRebond"
+
+	#. Configurer la VM :
+	$VMconfiguration = New-AzureRmVMConfig -VMName $VM_Rebond_Name -VMSize "Standard_A1"
+
+	$VM_Rebond = Set-AzureRmVMOperatingSystem -VM $VMconfiguration -Windows -ComputerName $VM_Rebond_Name -Credential $Credential_VM_Rebond -ProvisionVMAgent -EnableAutoUpdate
+
+	$VM_Rebond = Add-AzureRmVMNetworkInterface -VM $VM_Rebond -Id $nicpub1.Id
+
+	$VM_Rebond = Set-AzureRmVMSourceImage -VM $VM_Rebond -PublisherName "MicrosoftWindowsServer" -Offer "WindowsServer" -Skus "2016-Datacenter" -Version "latest"
+	$VM_Rebond = Set-AzureRmVMOSDisk -VM $VM_Rebond -CreateOption FromImage | Set-AzureRmVMBootDiagnostics -ResourceGroupName $resource_group -StorageAccountName storagegroupcis1 -Enable | Add-AzureRmVMNetworkInterface -Id $nicpub1.Id
+
+	New-AzureRmVM -ResourceGroupName $resource_group -Location $region -VM $VM_Rebond
+
+	#. On récupère l'IP publique allouée dynamiquement à cette VM :
+	Get-AzureRmPublicIpAddress -Name $IPpub1 -ResourceGroupName $resource_group
+
+
+
+#. Création d'une VM Linux (VM frontal Web) en DMZ :
+	# On définit un objet "credential"  pour stocker le username et password pour la VM :
+	$UserNameLinuxWeb = 'admincislinux'
+	$Password_VM_LinuxWeb = 'Ci5ValLey2019*32'| ConvertTo-SecureString -Force -AsPlainText
+	$Credential_VM_LinuxWeb = New-Object PSCredential($UserNameLinuxWeb,$Password_VM_LinuxWeb)
+
+	$VM_LinuxWeb_Name = "VMLinuxWeb"
+
+	$pip = New-AzureRmPublicIpAddress -ResourceGroupName $resource_group -Location $region -AllocationMethod Static -IdleTimeoutInMinutes 4 -Name "webpublicip$(Get-Random)"
+	$nic = New-AzureRmNetworkInterface -Name myNic -ResourceGroupName $resource_group -Location $region -SubnetId $virtual_network.Subnets[0].Id -PublicIpAddressId $pip.Id -NetworkSecurityGroupId $NSG_DMZ.Id
+
+	#. Configurer la VM :
+	$VMconfiguration = New-AzureRmVMConfig -VMName $VM_LinuxWeb_Name -VMSize "Standard_D1"
+
+	$VM_LinuxWeb = Set-AzureRmVMOperatingSystem -VM $VMconfiguration -Linux -ComputerName $VM_LinuxWeb_Name -Credential $Credential_VM_LinuxWeb
+
+	$VM_LinuxWeb = Set-AzureRmVMSourceImage -VM $VM_LinuxWeb -PublisherName "Canonical" -Offer "UbuntuServer" -Skus "16.04-LTS" -Version "latest"
+
+	$VirtualMachine = Set-AzureRmVMOSDisk -VM $VirtualMachine -CreateOption FromImage | Set-AzureRmVMBootDiagnostics -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Enable | Add-AzureRmVMNetworkInterface -Id $nic.Id
+
+	($VM_LinuxWeb = Add-AzureRmVMNetworkInterface -VM $VM_LinuxWeb -Id $nicpub2.Id)
+
+	($VM_LinuxWeb = Set-AzureRmVMOSDisk -VM $VM_LinuxWeb -CreateOption FromImage | Set-AzureRmVMBootDiagnostics -ResourceGroupName $resource_group -StorageAccountName storagegroupcis1 -Enable | Add-AzureRmVMNetworkInterface -Id $nicpub2.Id)
+
+
+	New-AzureRmVM -ResourceGroupName $resource_group -Location $region -VM $VM_LinuxWeb
+
+	#. On récupère l'IP publique allouée dynamiquement à cette VM :
+	Get-AzureRmPublicIpAddress -Name $IPpub1 -ResourceGroupName $resource_group
+
+
+
+#. Création d'une VM AD dans le LAN :
+
+	#. On spécifie le mot de passe admin de l'AD :
+	$credential = Get-Credential
+		(j'ai mis par exemple : Ci5ValLey2019*31)
+
+	Ce mot de passe est donc stocké dans la variable $credential, en mode chiffré.
+	$ADName = "DC01"
+
+	
+	#. Configurer la VM :
+	$VMconfiguration = New-AzureRmVMConfig -VMName $ADName -VMSize "Standard_A1"
+
+	$VM_AD = Set-AzureRmVMOperatingSystem -VM $VMconfiguration -Windows -ComputerName $ADName -Credential $credential -ProvisionVMAgent -EnableAutoUpdate
+
+	$NICpriv_MachineAD = "InterfaceReseauPrivMachineAD"
+	$IPAddressAD = '192.168.31.1'
+	$nicpriv1 = New-AzureRmNetworkInterface -Name $NICpriv_MachineAD -ResourceGroupName $resource_group -Location $region -Subnetid $SubnetID_LAN -PrivateIpAddress $IPAddress
+	$VM_AD = Add-AzureRmVMNetworkInterface -VM $VM_AD -Id $nicpriv1.Id
+
+	
+	Ancienne façon de faire pour spécifier le système d'exploitation : 
+		$Image_offer = Get-AzureRmVMImageOffer -Location $region -PublisherName 'MicrosoftWindowsServer'
+		$VM_AD = Set-AzureRmVMSourceImage -PublisherName "MicrosoftWindowsServer" -Version "latest" -Skus "2019-Datacenter" -VM $VM_AD -Offer $Image_offer.offer[0]
+		$OSDiskUri = $Compte_StockageCIS1.PrimaryEndpoints.Blob.ToString() + "vhds/" + $ADName + ".vhd"
+		$VM_AD = Set-AzureRmVMOSDisk -VM $VM_AD -Name $ADName -VhdUri $OSDiskUri -CreateOption FromImage
+
+
+	Nouvelle façon de faire pour spécifier le système d'exploitation : 
+	$VM_AD = Set-AzureRmVMSourceImage -VM $VM_AD -PublisherName "MicrosoftWindowsServer" -Offer "WindowsServer" -Skus "2016-Datacenter" -Version "latest"
+	$VM_AD = Set-AzureRmVMOSDisk -VM $VM_AD -CreateOption FromImage | Set-AzureRmVMBootDiagnostics -ResourceGroupName $resource_group -StorageAccountName storagegroupcis1 -Enable | Add-AzureRmVMNetworkInterface -Id $nicpriv1.Id
+
+	
+	#. Créer le contrôleur du domaine AD :
+	New-AzureRmVM -ResourceGroupName $resource_group -Location $region -VM $VM_AD
+
+
+	Suite : prendre la main  sur le DC et y installer/configurer le rôle Contrôleur de Domaine AD.
+
+
