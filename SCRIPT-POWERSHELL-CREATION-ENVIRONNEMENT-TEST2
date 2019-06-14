@@ -2,6 +2,9 @@
 URL de ref : Démarrage rapide : Créer une machine virtuelle Windows Server à l’aide de PowerShell :
 https://docs.microsoft.com/fr-fr/azure-stack/user/azure-stack-quick-create-vm-windows-powershell
 
+URL de ref : Démarrage rapide : Créer une machine virtuelle Linux à l’aide de PowerShell :
+https://docs.microsoft.com/fr-fr/azure-stack/user/azure-stack-quick-create-vm-linux-powershell
+
 #. Créer un groupe de ressources :
 
 Liste des régions :
