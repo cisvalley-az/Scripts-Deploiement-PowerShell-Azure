@@ -108,7 +108,7 @@ $Compte_StockageCIS1 = Get-AzureRmStorageAccount -ResourceGroupName $resource_gr
 	$nic = New-AzureRmNetworkInterface -Name myNic -ResourceGroupName $resource_group -Location $region -SubnetId $virtual_network.Subnets[0].Id -PublicIpAddressId $pip.Id -NetworkSecurityGroupId $NSG_DMZ.Id
 
 	#. Configurer la VM :
-	$VMconfiguration = New-AzureRmVMConfig -VMName $VM_LinuxWeb_Name -VMSize "Standard_D1"
+	$VMconfiguration = New-AzureRmVMConfig -VMName $VM_LinuxWeb_Name -VMSize "Standard_A1"
 
 	$VM_LinuxWeb = Set-AzureRmVMOperatingSystem -VM $VMconfiguration -Linux -ComputerName $VM_LinuxWeb_Name -Credential $Credential_VM_LinuxWeb
 
@@ -116,16 +116,14 @@ $Compte_StockageCIS1 = Get-AzureRmStorageAccount -ResourceGroupName $resource_gr
 
 	$VirtualMachine = Set-AzureRmVMOSDisk -VM $VirtualMachine -CreateOption FromImage | Set-AzureRmVMBootDiagnostics -ResourceGroupName $ResourceGroupName -StorageAccountName $StorageAccountName -Enable | Add-AzureRmVMNetworkInterface -Id $nic.Id
 
-	($VM_LinuxWeb = Add-AzureRmVMNetworkInterface -VM $VM_LinuxWeb -Id $nicpub2.Id)
+	$VM_LinuxWeb = Add-AzureRmVMNetworkInterface -VM $VM_LinuxWeb -Id $nic.Id
 
-	($VM_LinuxWeb = Set-AzureRmVMOSDisk -VM $VM_LinuxWeb -CreateOption FromImage | Set-AzureRmVMBootDiagnostics -ResourceGroupName $resource_group -StorageAccountName storagegroupcis1 -Enable | Add-AzureRmVMNetworkInterface -Id $nicpub2.Id)
-
+	$VM_LinuxWeb = Set-AzureRmVMOSDisk -VM $VM_LinuxWeb -CreateOption FromImage | Set-AzureRmVMBootDiagnostics -ResourceGroupName $resource_group -StorageAccountName storagegroupcis1 -Enable | Add-AzureRmVMNetworkInterface -Id $nic.Id
 
 	New-AzureRmVM -ResourceGroupName $resource_group -Location $region -VM $VM_LinuxWeb
 
 	#. On récupère l'IP publique allouée dynamiquement à cette VM :
 	Get-AzureRmPublicIpAddress -Name $IPpub1 -ResourceGroupName $resource_group
-
 
 
 #. Création d'une VM AD dans le LAN :
@@ -166,5 +164,3 @@ $Compte_StockageCIS1 = Get-AzureRmStorageAccount -ResourceGroupName $resource_gr
 
 
 	Suite : prendre la main  sur le DC et y installer/configurer le rôle Contrôleur de Domaine AD.
-
-
